@@ -5,7 +5,8 @@ on:
     types: [created]
 
   schedule:
-    - cron: "0 0 * * *" # Runs daily at midnight UTC
+    - cron: "0 0 * * *"     # Daily summary at midnight UTC
+    - cron: "55 23 L * *"   # Monthly roll-up on the last day of the month at 23:55 UTC
 
 jobs:
   log-attendance:
@@ -38,7 +39,7 @@ jobs:
           with open(repo_file, "a", newline="") as f:
               writer = csv.writer(f)
               if not file_exists:
-                  writer.writerow(["Date","Employee","Action","Timestamp"])
+                  writer.writerow(["Date", "Employee", "Action", "Timestamp"])
               writer.writerow([date_str, username, action, timestamp])
 
       - name: Commit and push
@@ -66,7 +67,6 @@ jobs:
 
           today = datetime.date.today()
           date_str = today.strftime("%d %B %Y")   # "28 September 2025"
-          today_str = today.strftime("%Y-%m-%d")
 
           logs_file = "attendance.csv"
           summary_file = "attendance_summary.csv"
@@ -76,7 +76,7 @@ jobs:
               with open(logs_file, "r") as f:
                   reader = csv.DictReader(f)
                   for row in reader:
-                      if row["Date"] == date_str:  # match today
+                      if row["Date"] == date_str:  # only today
                           emp = row["Employee"]
                           if emp not in records:
                               records[emp] = {"checkin": None, "checkout": None}
@@ -107,7 +107,7 @@ jobs:
           with open(summary_file, "a", newline="") as f:
               writer = csv.writer(f)
               if not file_exists:
-                  writer.writerow(["Date", "Employee", "Check-In", "Check-Out", "Total Hours", "Status"])
+                  writer.writerow(["Date","Employee","Check-In","Check-Out","Total Hours","Status"])
               for row in summary:
                   writer.writerow(row)
 
@@ -117,4 +117,63 @@ jobs:
           git config --global user.email "actions@github.com"
           git add attendance_summary.csv
           git commit -m "Daily summary update"
+          git push
+
+  monthly-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Generate monthly roll-up
+        run: |
+          import csv, datetime, os
+          from collections import defaultdict
+
+          today = datetime.date.today()
+          month_str = today.strftime("%B %Y")   # e.g., "September 2025"
+          summary_file = "attendance_summary.csv"
+          monthly_file = "monthly_summary.csv"
+
+          stats = defaultdict(lambda: {"present":0, "halfday":0, "absent":0, "hours":0})
+
+          if os.path.isfile(summary_file):
+              with open(summary_file, "r") as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      if month_str in row["Date"]:
+                          emp = row["Employee"]
+                          status = row["Status"]
+                          hours = float(row["Total Hours"]) if row["Total Hours"] else 0
+                          if status == "Present":
+                              stats[emp]["present"] += 1
+                          elif status == "Half Day":
+                              stats[emp]["halfday"] += 1
+                          elif status == "Absent":
+                              stats[emp]["absent"] += 1
+                          stats[emp]["hours"] += hours
+
+          rollup = []
+          for emp, data in stats.items():
+              rollup.append([month_str, emp, data["present"], data["halfday"], data["absent"], round(data["hours"],2)])
+
+          file_exists = os.path.isfile(monthly_file)
+          with open(monthly_file, "a", newline="") as f:
+              writer = csv.writer(f)
+              if not file_exists:
+                  writer.writerow(["Month", "Employee", "Present Days", "Half Days", "Absent Days", "Total Hours"])
+              for row in rollup:
+                  writer.writerow(row)
+
+      - name: Commit and push monthly summary
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add monthly_summary.csv
+          git commit -m "Monthly roll-up update"
           git push
