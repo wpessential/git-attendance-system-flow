@@ -1,0 +1,120 @@
+name: Employee Attendance System
+
+on:
+  issue_comment:
+    types: [created]
+
+  schedule:
+    - cron: "0 0 * * *" # Runs daily at midnight UTC
+
+jobs:
+  log-attendance:
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '/checkin') || contains(github.event.comment.body, '/checkout')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Log check-in/out
+        run: |
+          import csv, os
+          from datetime import datetime
+
+          repo_file = "attendance.csv"
+          username = "${{ github.event.comment.user.login }}"
+          action = "Check-In" if "/checkin" in "${{ github.event.comment.body }}" else "Check-Out"
+          now = datetime.utcnow()
+
+          date_str = now.strftime("%d %B %Y")   # "28 September 2025"
+          timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+
+          file_exists = os.path.isfile(repo_file)
+          with open(repo_file, "a", newline="") as f:
+              writer = csv.writer(f)
+              if not file_exists:
+                  writer.writerow(["Date","Employee","Action","Timestamp"])
+              writer.writerow([date_str, username, action, timestamp])
+
+      - name: Commit and push
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add attendance.csv
+          git commit -m "Log attendance"
+          git push
+
+  daily-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Generate daily summary
+        run: |
+          import csv, datetime, os
+
+          today = datetime.date.today()
+          date_str = today.strftime("%d %B %Y")   # "28 September 2025"
+          today_str = today.strftime("%Y-%m-%d")
+
+          logs_file = "attendance.csv"
+          summary_file = "attendance_summary.csv"
+
+          records = {}
+          if os.path.isfile(logs_file):
+              with open(logs_file, "r") as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      if row["Date"] == date_str:  # match today
+                          emp = row["Employee"]
+                          if emp not in records:
+                              records[emp] = {"checkin": None, "checkout": None}
+                          if row["Action"] == "Check-In" and not records[emp]["checkin"]:
+                              records[emp]["checkin"] = datetime.datetime.strptime(row["Timestamp"], "%Y-%m-%d %H:%M:%S")
+                          if row["Action"] == "Check-Out":
+                              records[emp]["checkout"] = datetime.datetime.strptime(row["Timestamp"], "%Y-%m-%d %H:%M:%S")
+
+          summary = []
+          for emp, times in records.items():
+              checkin = times["checkin"]
+              checkout = times["checkout"]
+              total_hours = 0
+              status = "Absent"
+
+              if checkin and checkout:
+                  total_hours = (checkout - checkin).seconds / 3600
+                  if total_hours >= 8:
+                      status = "Present"
+                  elif total_hours >= 4:
+                      status = "Half Day"
+                  else:
+                      status = "Absent"
+
+              summary.append([date_str, emp, checkin, checkout, round(total_hours,2), status])
+
+          file_exists = os.path.isfile(summary_file)
+          with open(summary_file, "a", newline="") as f:
+              writer = csv.writer(f)
+              if not file_exists:
+                  writer.writerow(["Date", "Employee", "Check-In", "Check-Out", "Total Hours", "Status"])
+              for row in summary:
+                  writer.writerow(row)
+
+      - name: Commit and push summary
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add attendance_summary.csv
+          git commit -m "Daily summary update"
+          git push
