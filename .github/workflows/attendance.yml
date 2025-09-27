@@ -5,7 +5,7 @@ on:
     types: [created]
   schedule:
     - cron: "0 0 * * *"       # Daily summary at midnight UTC
-    - cron: "55 23 28-31 * *" # Monthly roll-up on the last few days of the month at 23:55 UTC
+    - cron: "55 23 28-31 * *" # Monthly roll-up on the last few days of month at 23:55 UTC
 
 jobs:
   log-attendance:
@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -111,7 +113,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Log attendance: ${{ github.event.comment.user.login }} - $(date)"
-            git push
+            git push origin main
           fi
 
   daily-summary:
@@ -235,7 +237,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Daily attendance summary - $(date -d yesterday '+%d %B %Y')"
-            git push
+            git push origin main
           fi
 
   monthly-summary:
@@ -366,7 +368,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Monthly attendance summary - $(date '+%B %Y')"
-            git push
+            git push origin main
           fi
 
   # Optional: Generate attendance report
@@ -406,7 +408,7 @@ jobs:
           # Sort by date (most recent first)
           rows.sort(key=lambda x: datetime.strptime(x["Date"], "%d %B %Y"), reverse=True)
           
-          # Take the last 30 days
+          # Take last 30 days
           recent_rows = rows[:30] if len(rows) > 30 else rows
           
           report_lines.append("| Date | Employee | Check-In | Check-Out | Hours | Status |\n")
@@ -415,7 +417,7 @@ jobs:
           for row in recent_rows:
               report_lines.append(f"| {row['Date']} | {row['Employee']} | {row['Check-In']} | {row['Check-Out']} | {row['Total Hours']} | {row['Status']} |\n")
           
-          # Write a report
+          # Write report
           with open("ATTENDANCE_REPORT.md", "w") as f:
               f.writelines(report_lines)
           
@@ -430,5 +432,5 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Generate attendance report"
-            git push
+            git push origin main
           fi
