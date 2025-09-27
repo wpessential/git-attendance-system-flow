@@ -5,7 +5,7 @@ on:
     types: [created]
   schedule:
     - cron: "0 0 * * *"       # Daily summary at midnight UTC
-    - cron: "55 23 28-31 * *" # Monthly roll-up on the last few days of month at 23:55 UTC
+    - cron: "55 23 28-31 * *" # Monthly roll-up on the last few days of the month at 23:55 UTC
 
 jobs:
   log-attendance:
@@ -37,7 +37,7 @@ jobs:
           # Configuration
           repo_file = "attendance.csv"
           timezone_str = "Asia/Karachi"
-          authorized_users = "user1,user2,user3,admin"  # Update with your usernames
+          authorized_users = "wpessential,user2,user3,admin"  # Update with your usernames
           username = "${{ github.event.comment.user.login }}"
           comment_body = "${{ github.event.comment.body }}"
           
