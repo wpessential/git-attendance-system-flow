@@ -43,7 +43,7 @@ jobs:
           # Configuration
           repo_file = "attendance.csv"
           timezone_str = "Asia/Karachi"
-          authorized_users = "wpessential,user2,user3,admin"  # Update with your usernames
+          authorized_users = "wpessential,codehammad,anasriaz444"  # Update with your usernames
           username = "${{ github.event.comment.user.login }}"
           comment_body = "${{ github.event.comment.body }}"
           
