@@ -7,18 +7,10 @@ on:
     - cron: "0 0 * * *"     # Daily summary at midnight UTC
     - cron: "55 23 L * *"   # Monthly roll-up on the last day of the month at 23:55 UTC
 
-env:
-  # Configure your timezone here
-  TIMEZONE: 'Asia/Karachi'
-  # Add authorized users here (comma-separated)
-  AUTHORIZED_USERS: 'wpessential,user2,user3,admin'
-
 jobs:
   log-attendance:
     runs-on: ubuntu-latest
-    if: |
-      (contains(github.event.comment.body, '/checkin') || contains(github.event.comment.body, '/checkout')) &&
-      contains(fromJson(format('["{}"]', replace(env.AUTHORIZED_USERS, ',', '","'))), github.event.comment.user.login)
+    if: contains(github.event.comment.body, '/checkin') || contains(github.event.comment.body, '/checkout')
 
     steps:
       - name: Checkout repository
@@ -44,9 +36,17 @@ jobs:
 
           # Configuration
           repo_file = "attendance.csv"
-          timezone_str = "${{ env.TIMEZONE }}"
+          timezone_str = "Asia/Karachi"
+          authorized_users = "wpessential,user2,user3,admin"  # Update with your usernames
           username = "${{ github.event.comment.user.login }}"
           comment_body = "${{ github.event.comment.body }}"
+          
+          # Check if user is authorized
+          auth_list = [user.strip() for user in authorized_users.split(',')]
+          if username not in auth_list:
+              print(f"Error: User {username} is not authorized to use attendance system")
+              print(f"Authorized users: {', '.join(auth_list)}")
+              sys.exit(1)
           
           # Determine action
           if "/checkin" in comment_body.lower():
@@ -141,7 +141,7 @@ jobs:
           from collections import defaultdict
 
           # Configuration
-          timezone_str = "${{ env.TIMEZONE }}"
+          timezone_str = "Asia/Karachi"
           logs_file = "attendance.csv"
           summary_file = "attendance_summary.csv"
 
@@ -265,7 +265,7 @@ jobs:
           from collections import defaultdict
 
           # Configuration
-          timezone_str = "${{ env.TIMEZONE }}"
+          timezone_str = "Asia/Karachi"
           summary_file = "attendance_summary.csv"
           monthly_file = "monthly_summary.csv"
 
