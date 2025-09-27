@@ -3,38 +3,95 @@ name: Employee Attendance System
 on:
   issue_comment:
     types: [created]
-
   schedule:
     - cron: "0 0 * * *"     # Daily summary at midnight UTC
-    #- cron: "55 23 L * *"   # Monthly roll-up on the last day of the month at 23:55 UTC
+    - cron: "55 23 L * *"   # Monthly roll-up on the last day of the month at 23:55 UTC
+
+env:
+  # Configure your timezone here
+  TIMEZONE: '+5'
+  # Add authorized users here (comma-separated)
+  AUTHORIZED_USERS: 'wpessential,user2,user3,admin'
 
 jobs:
   log-attendance:
     runs-on: ubuntu-latest
-    if: contains(github.event.comment.body, '/checkin') || contains(github.event.comment.body, '/checkout')
+    if: |
+      (contains(github.event.comment.body, '/checkin') || contains(github.event.comment.body, '/checkout')) &&
+      contains(fromJson(format('["{}"]', replace(env.AUTHORIZED_USERS, ',', '","'))), github.event.comment.user.login)
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytz
+
       - name: Log check-in/out
         run: |
-          import csv, os
+          import csv
+          import os
+          import sys
+          import pytz
           from datetime import datetime
 
+          # Configuration
           repo_file = "attendance.csv"
+          timezone_str = "${{ env.TIMEZONE }}"
           username = "${{ github.event.comment.user.login }}"
-          action = "Check-In" if "/checkin" in "${{ github.event.comment.body }}" else "Check-Out"
-          now = datetime.utcnow()
+          comment_body = "${{ github.event.comment.body }}"
+          
+          # Determine action
+          if "/checkin" in comment_body.lower():
+              action = "Check-In"
+          elif "/checkout" in comment_body.lower():
+              action = "Check-Out"
+          else:
+              print("Invalid action")
+              sys.exit(1)
 
-          date_str = now.strftime("%d %B %Y")   # "28 September 2025"
-          timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+          # Get current time in specified timezone
+          try:
+              tz = pytz.timezone(timezone_str)
+              now = datetime.now(tz)
+          except:
+              print(f"Invalid timezone: {timezone_str}, using UTC")
+              now = datetime.utcnow().replace(tzinfo=pytz.UTC)
 
+          date_str = now.strftime("%d %B %Y")
+          timestamp = now.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+          # Check for existing records today
+          existing_records = []
+          if os.path.isfile(repo_file):
+              with open(repo_file, "r", newline="") as f:
+                  reader = csv.DictReader(f)
+                  existing_records = [row for row in reader if row["Date"] == date_str and row["Employee"] == username]
+
+          # Validate check-in/check-out logic
+          has_checkin = any(record["Action"] == "Check-In" for record in existing_records)
+          has_checkout = any(record["Action"] == "Check-Out" for record in existing_records)
+
+          if action == "Check-In":
+              if has_checkin:
+                  print(f"Error: {username} has already checked in today")
+                  sys.exit(1)
+          elif action == "Check-Out":
+              if not has_checkin:
+                  print(f"Error: {username} must check in before checking out")
+                  sys.exit(1)
+              if has_checkout:
+                  print(f"Error: {username} has already checked out today")
+                  sys.exit(1)
+
+          # Log the attendance
           file_exists = os.path.isfile(repo_file)
           with open(repo_file, "a", newline="") as f:
               writer = csv.writer(f)
@@ -42,138 +99,336 @@ jobs:
                   writer.writerow(["Date", "Employee", "Action", "Timestamp"])
               writer.writerow([date_str, username, action, timestamp])
 
+          print(f"Successfully logged {action} for {username} at {timestamp}")
+        shell: python
+
       - name: Commit and push
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add attendance.csv
-          git commit -m "Log attendance"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Log attendance: ${{ github.event.comment.user.login }} - $(date)"
+            git push
+          fi
 
   daily-summary:
     runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * *'
+    
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytz
+
       - name: Generate daily summary
         run: |
-          import csv, datetime, os
+          import csv
+          import os
+          import pytz
+          from datetime import datetime, timedelta
+          from collections import defaultdict
 
-          today = datetime.date.today()
-          date_str = today.strftime("%d %B %Y")   # "28 September 2025"
-
+          # Configuration
+          timezone_str = "${{ env.TIMEZONE }}"
           logs_file = "attendance.csv"
           summary_file = "attendance_summary.csv"
 
-          records = {}
+          try:
+              tz = pytz.timezone(timezone_str)
+              yesterday = (datetime.now(tz) - timedelta(days=1)).date()
+          except:
+              yesterday = (datetime.utcnow() - timedelta(days=1)).date()
+
+          date_str = yesterday.strftime("%d %B %Y")
+
+          # Read attendance records for yesterday
+          records = defaultdict(lambda: {"checkin": None, "checkout": None, "checkin_time": None, "checkout_time": None})
+          
           if os.path.isfile(logs_file):
-              with open(logs_file, "r") as f:
+              with open(logs_file, "r", newline="") as f:
                   reader = csv.DictReader(f)
                   for row in reader:
-                      if row["Date"] == date_str:  # only today
+                      if row["Date"] == date_str:
                           emp = row["Employee"]
-                          if emp not in records:
-                              records[emp] = {"checkin": None, "checkout": None}
+                          timestamp_str = row["Timestamp"].split(' ')[0] + ' ' + row["Timestamp"].split(' ')[1]  # Remove timezone for parsing
+                          
+                          try:
+                              timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                          except ValueError:
+                              continue  # Skip invalid timestamps
+                          
                           if row["Action"] == "Check-In" and not records[emp]["checkin"]:
-                              records[emp]["checkin"] = datetime.datetime.strptime(row["Timestamp"], "%Y-%m-%d %H:%M:%S")
-                          if row["Action"] == "Check-Out":
-                              records[emp]["checkout"] = datetime.datetime.strptime(row["Timestamp"], "%Y-%m-%d %H:%M:%S")
+                              records[emp]["checkin"] = timestamp_str
+                              records[emp]["checkin_time"] = timestamp
+                          elif row["Action"] == "Check-Out" and records[emp]["checkin_time"]:
+                              records[emp]["checkout"] = timestamp_str
+                              records[emp]["checkout_time"] = timestamp
 
-          summary = []
+          # Calculate summary
+          summary_data = []
           for emp, times in records.items():
               checkin = times["checkin"]
               checkout = times["checkout"]
+              checkin_time = times["checkin_time"]
+              checkout_time = times["checkout_time"]
+              
               total_hours = 0
               status = "Absent"
 
-              if checkin and checkout:
-                  total_hours = (checkout - checkin).seconds / 3600
+              if checkin_time and checkout_time:
+                  # Fix: Use total_seconds() instead of seconds
+                  total_hours = (checkout_time - checkin_time).total_seconds() / 3600
+                  
                   if total_hours >= 8:
                       status = "Present"
                   elif total_hours >= 4:
                       status = "Half Day"
                   else:
-                      status = "Absent"
+                      status = "Insufficient Hours"
+              elif checkin_time and not checkout_time:
+                  status = "Incomplete (No Check-Out)"
+              else:
+                  status = "No Check-In"
 
-              summary.append([date_str, emp, checkin, checkout, round(total_hours,2), status])
+              summary_data.append([
+                  date_str, 
+                  emp, 
+                  checkin if checkin else "N/A", 
+                  checkout if checkout else "N/A", 
+                  round(total_hours, 2), 
+                  status
+              ])
 
-          file_exists = os.path.isfile(summary_file)
-          with open(summary_file, "a", newline="") as f:
-              writer = csv.writer(f)
-              if not file_exists:
-                  writer.writerow(["Date","Employee","Check-In","Check-Out","Total Hours","Status"])
-              for row in summary:
-                  writer.writerow(row)
+          # Write summary
+          if summary_data:
+              file_exists = os.path.isfile(summary_file)
+              with open(summary_file, "a", newline="") as f:
+                  writer = csv.writer(f)
+                  if not file_exists:
+                      writer.writerow(["Date", "Employee", "Check-In", "Check-Out", "Total Hours", "Status"])
+                  for row in summary_data:
+                      writer.writerow(row)
+              
+              print(f"Generated daily summary for {date_str} with {len(summary_data)} employee records")
+          else:
+              print(f"No attendance records found for {date_str}")
+        shell: python
 
       - name: Commit and push summary
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add attendance_summary.csv
-          git commit -m "Daily summary update"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Daily attendance summary - $(date -d yesterday '+%d %B %Y')"
+            git push
+          fi
 
   monthly-summary:
     runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && github.event.schedule == '55 23 L * *'
+    
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytz
+
       - name: Generate monthly roll-up
         run: |
-          import csv, datetime, os
+          import csv
+          import os
+          import pytz
+          from datetime import datetime, timedelta
           from collections import defaultdict
 
-          today = datetime.date.today()
-          month_str = today.strftime("%B %Y")   # e.g., "September 2025"
+          # Configuration
+          timezone_str = "${{ env.TIMEZONE }}"
           summary_file = "attendance_summary.csv"
           monthly_file = "monthly_summary.csv"
 
-          stats = defaultdict(lambda: {"present":0, "halfday":0, "absent":0, "hours":0})
+          try:
+              tz = pytz.timezone(timezone_str)
+              today = datetime.now(tz).date()
+          except:
+              today = datetime.utcnow().date()
+
+          month_str = today.strftime("%B %Y")
+
+          # Read daily summaries for current month
+          stats = defaultdict(lambda: {
+              "present": 0, 
+              "halfday": 0, 
+              "absent": 0, 
+              "incomplete": 0,
+              "insufficient": 0,
+              "no_checkin": 0,
+              "total_hours": 0
+          })
 
           if os.path.isfile(summary_file):
-              with open(summary_file, "r") as f:
+              with open(summary_file, "r", newline="") as f:
                   reader = csv.DictReader(f)
                   for row in reader:
                       if month_str in row["Date"]:
                           emp = row["Employee"]
                           status = row["Status"]
-                          hours = float(row["Total Hours"]) if row["Total Hours"] else 0
+                          
+                          try:
+                              hours = float(row["Total Hours"]) if row["Total Hours"] and row["Total Hours"] != "N/A" else 0
+                          except ValueError:
+                              hours = 0
+                          
+                          # Categorize status
                           if status == "Present":
                               stats[emp]["present"] += 1
                           elif status == "Half Day":
                               stats[emp]["halfday"] += 1
                           elif status == "Absent":
                               stats[emp]["absent"] += 1
-                          stats[emp]["hours"] += hours
+                          elif "Incomplete" in status:
+                              stats[emp]["incomplete"] += 1
+                          elif "Insufficient" in status:
+                              stats[emp]["insufficient"] += 1
+                          elif "No Check-In" in status:
+                              stats[emp]["no_checkin"] += 1
+                          
+                          stats[emp]["total_hours"] += hours
 
-          rollup = []
+          # Generate monthly summary
+          monthly_data = []
           for emp, data in stats.items():
-              rollup.append([month_str, emp, data["present"], data["halfday"], data["absent"], round(data["hours"],2)])
+              total_days = sum([data["present"], data["halfday"], data["absent"], 
+                              data["incomplete"], data["insufficient"], data["no_checkin"]])
+              
+              attendance_rate = round((data["present"] + data["halfday"] * 0.5) / total_days * 100, 2) if total_days > 0 else 0
+              
+              monthly_data.append([
+                  month_str,
+                  emp,
+                  data["present"],
+                  data["halfday"],
+                  data["absent"],
+                  data["incomplete"],
+                  data["insufficient"],
+                  data["no_checkin"],
+                  round(data["total_hours"], 2),
+                  f"{attendance_rate}%"
+              ])
 
-          file_exists = os.path.isfile(monthly_file)
-          with open(monthly_file, "a", newline="") as f:
-              writer = csv.writer(f)
-              if not file_exists:
-                  writer.writerow(["Month", "Employee", "Present Days", "Half Days", "Absent Days", "Total Hours"])
-              for row in rollup:
-                  writer.writerow(row)
+          # Write monthly summary
+          if monthly_data:
+              file_exists = os.path.isfile(monthly_file)
+              with open(monthly_file, "a", newline="") as f:
+                  writer = csv.writer(f)
+                  if not file_exists:
+                      writer.writerow([
+                          "Month", "Employee", "Present Days", "Half Days", "Absent Days", 
+                          "Incomplete Days", "Insufficient Hours Days", "No Check-In Days", 
+                          "Total Hours", "Attendance Rate"
+                      ])
+                  for row in monthly_data:
+                      writer.writerow(row)
+              
+              print(f"Generated monthly summary for {month_str} with {len(monthly_data)} employee records")
+          else:
+              print(f"No attendance data found for {month_str}")
+        shell: python
 
       - name: Commit and push monthly summary
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add monthly_summary.csv
-          git commit -m "Monthly roll-up update"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Monthly attendance summary - $(date '+%B %Y')"
+            git push
+          fi
+
+  # Optional: Generate attendance report
+  generate-report:
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '/attendance-report')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Generate attendance report
+        run: |
+          import csv
+          import os
+          from datetime import datetime, timedelta
+
+          summary_file = "attendance_summary.csv"
+          
+          if not os.path.isfile(summary_file):
+              print("No attendance summary found")
+              exit(0)
+
+          # Get last 30 days of data
+          report_lines = ["# Attendance Report - Last 30 Days\n"]
+          report_lines.append(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+          
+          with open(summary_file, "r", newline="") as f:
+              reader = csv.DictReader(f)
+              rows = list(reader)
+          
+          # Sort by date (most recent first)
+          rows.sort(key=lambda x: datetime.strptime(x["Date"], "%d %B %Y"), reverse=True)
+          
+          # Take last 30 days
+          recent_rows = rows[:30] if len(rows) > 30 else rows
+          
+          report_lines.append("| Date | Employee | Check-In | Check-Out | Hours | Status |\n")
+          report_lines.append("|------|----------|----------|-----------|-------|--------|\n")
+          
+          for row in recent_rows:
+              report_lines.append(f"| {row['Date']} | {row['Employee']} | {row['Check-In']} | {row['Check-Out']} | {row['Total Hours']} | {row['Status']} |\n")
+          
+          # Write report
+          with open("ATTENDANCE_REPORT.md", "w") as f:
+              f.writelines(report_lines)
+          
+          print("Attendance report generated successfully")
+
+      - name: Commit report
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ATTENDANCE_REPORT.md
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Generate attendance report"
+            git push
+          fi
