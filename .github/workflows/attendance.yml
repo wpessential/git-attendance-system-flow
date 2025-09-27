@@ -9,7 +9,7 @@ on:
 
 env:
   # Configure your timezone here
-  TIMEZONE: '+5'
+  TIMEZONE: 'Asia/Karachi'
   # Add authorized users here (comma-separated)
   AUTHORIZED_USERS: 'wpessential,user2,user3,admin'
 
