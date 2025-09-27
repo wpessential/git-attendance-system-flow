@@ -1,5 +1,9 @@
 name: Employee Attendance System
 
+permissions:
+  contents: write
+  actions: read
+
 on:
   issue_comment:
     types: [created]
@@ -15,6 +19,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
